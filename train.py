@@ -1,201 +1,63 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 This module is used to train the S2F GAN.
 The module structure is the following:
+    - A print function used to record training log 
     - A parser used to read the parameters from users.
-    - Check if cua installed
-    - Create folders "images" and "saved_models" to store the samples and checkpoints during training.
     - Set torch home that is used by pytorch to store the pretrained models 
     - Initialize S2F GAN and optmizers
     - A data_prefetecher is used to load the inputs to cuda during training.
-    - A process function used to scales inputs
-    - A sample_images function used to sample images during training.
-    - A R1_penalty used to calculate the gradient penalty of predicting true samples as fake samples
-    - A train loop used to call and excute the script.
-
+    - A train function used to call and excute the script.
 The training logs will be stored in log.txt
 """
 
-import argparse
-import datetime
-import numpy as np
-from models import Encoder,VGGPerceptualLoss,Decoder,Discriminator
-from apex import amp
-from dataset import CeleDataset
-import torch.autograd as autograd
-from torch.autograd import Variable
-from torchvision.utils import save_image
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
-import torch.nn as nn
 import os
-import time
+import argparse
+import numpy as np
 import torch
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--epoch", type=int, default=0, help="epoch to start training from")
-parser.add_argument("--n_epochs", type=int, default=10, help="number of epochs of training")
-parser.add_argument("--batch_size", type=int, default=4, help="size of the batches")
-parser.add_argument("--lr", type=float, default=0.0015, help="adam: learning rate")
-parser.add_argument("--b1", type=float, default=0.5, help="adam: decay of first order momentum of gradient")
-parser.add_argument("--b2", type=float, default=0.999, help="adam: decay of first order momentum of gradient")
-parser.add_argument("--decay_epoch", type=int, default=100, help="epoch from which to start lr decay")
-parser.add_argument("--img_height", type=int, default=128, help="size of image height")
-parser.add_argument("--img_width", type=int, default=128, help="size of image width")
-parser.add_argument("--lambda_vgg", type=int, default=3, help="weight of vgg perceptual loss")
-parser.add_argument("--lambda_reconst", type=int, default=3, help="weight of image reconstruction loss")
-parser.add_argument("--lambda_ratio", type=int, default=3, help="weight of attributes reconstruction loss")
-parser.add_argument("--channels", type=int, default=1, help="number of image channels, sketch:1, mask:18")
-parser.add_argument("--sample_interval", type=int, default= 1, help="interval between saving generator samples")
-parser.add_argument("--checkpoint_interval", type=int, default=1, help="interval between saving model checkpoints")
-parser.add_argument("--TORCH_HOME", type=str, default="None", help="where to load/save pytorch pretrained models")
-parser.add_argument("--NumOfImage", type=int, default= 10, help = "number of images in the zip")
-parser.add_argument("--imageZip", type=str, default= "data/CelebAMask-HQ-Sample.zip", help = "input image zip")
-parser.add_argument("--imagePath",type=str, default= "CelebAMask-HQ-Sample/CelebA-HQ-img", help = "path of images in the zip")
-parser.add_argument("--hedEdgeZip", type=str, default= "data/hed_edge_256-Sample.zip", help = "hed sketch zip")
-parser.add_argument("--hedEdgePath", type=str, default= "hed_edge_256-Sample", help = "path of sketch in the zip")
-parser.add_argument("--maskZip",  type=str, default= "data/CelebAMaskHQ-mask_256-sample.zip", help = "mask zip")
-parser.add_argument("--label_path", type = str, default = "data/CelebAMask-HQ-attribute-anno.txt", help = "attributes annotation text file of CelebAMask-HQ")
-parser.add_argument("--task_type", type = int, default = 0, help = "0- edge to image, 1-mask to image")
-parser.add_argument(
-    "--selected_attrs",
-    type = list,
-    nargs="+",
-    help="selected attributes for the CelebAMask-HQ dataset",
-    default=["Smiling", "Male","No_Beard", "Eyeglasses","Young", "Bangs", "Narrow_Eyes", "Pale_Skin", "Big_Lips","Big_Nose","Mustache","Chubby"],
-)
-parser.add_argument(
-    "--ATMDTT",
-    type = list,
-    nargs="+",
-    help="Attributes to manipulate during testing time",
-    default=    
-    [[1,0,0,0,0,0,0,0,0,0,0,0],
-     [0,1,0,0,0,0,0,0,0,0,0,0]
-     ]
-)
-
-opt = parser.parse_args()
-
-#write the paramters to train S2FGAN in log.txt
-with open("log.txt","a") as f:
-    f.write(str(opt) + "\n")
-
-#create folders to store samples and checkpoints
-os.makedirs("images", exist_ok=True)
-os.makedirs("saved_models", exist_ok=True)
-#Set TORCH_HOME to system enviroment.
-if opt.TORCH_HOME != "None":
-    os.environ['TORCH_HOME'] = opt.TORCH_HOME
-
-if opt.img_height == 128:
-    STEP = 1
-elif opt.img_height == 256:
-    STEP = 2
-elif opt.img_height == 512:
-    STEP = 3
-else: 
-    raise SystemExit("Unrecognized Image Resolution") 
-
-#Sanity check of GPU installation
-if not torch.cuda.is_available():
-    raise SystemExit("GPU Required")
+from torch import nn
+from torch.nn import functional as F
+from torch.utils import data
+from torchvision import utils
+from model import Model as S2FGAN
+from dataset import CeleDataset
+from non_leaking import augment
+import time
+import datetime
+import torch.backends.cudnn as cudnn
 
 #Speed up training
-torch.backends.cudnn.benchmark=True
+cudnn.benchmark = True
 
-#Initialze loss functions
-criterion_reconst = torch.nn.L1Loss()
-criterion_GAN     = torch.nn.MSELoss()
-criterion_ratio   = torch.nn.MSELoss()
-
-#Initialize loss weight
-lambda_vgg     = opt.lambda_vgg
-lambda_reconst = opt.lambda_reconst
-lambda_ratio   = opt.lambda_ratio
- 
-#Initialize S2FGAN and perceptual loss
-E1         = Encoder(opt.channels)
-vgg        = VGGPerceptualLoss()
-D1         = Decoder(c_dim = len(opt.selected_attrs),step = STEP)
-des1       = Discriminator((3, opt.img_height, opt.img_width), c_dim = len(opt.selected_attrs),step = STEP)
-
-#move S2FGAN and perceptual loss to cuda.
-E1 = E1.cuda()
-vgg= vgg.cuda()
-D1 = D1.cuda()
-    
-des1  = des1.cuda()
-criterion_reconst.cuda()
-criterion_GAN.cuda()
-criterion_ratio.cuda()
-    
-#Initialize model optimizers
-optimizer_G = torch.optim.Adam(
-    [{'params': E1.parameters()},
-     {'params': D1.parameters()}
-     ],
-    lr=opt.lr, 
-    betas=(opt.b1, opt.b2))
-optimizer_D = torch.optim.Adam(
-    des1.parameters(), 
-    lr=opt.lr, 
-    betas=(opt.b1, opt.b2))
-
-#using AMP libray to place part of model paramters as float16
-[E1,D1,des1,vgg],[optimizer_D,optimizer_G] = amp.initialize([E1,D1,des1,vgg],[optimizer_D,optimizer_G],opt_level = "O1", num_losses = 2) 
-
-#If there are multi-GPUS, the data parallel will be used.
-if torch.cuda.device_count() > 1:
-    E1     = nn.DataParallel(E1)
-    vgg    = nn.DataParallel(vgg)
-    D1     = nn.DataParallel(D1)
-    des1   = nn.DataParallel(des1)
-    
-#if the starting epoch is not 0, then load the checkpoints.    
-if opt.epoch != 0:
-    checkpoints = torch.load("saved_models/checkpoits_%d.pt" % opt.epoch)
-    E1.load_state_dict(checkpoints["E1"])
-    D1.load_state_dict(checkpoints["D1"])
-    des1.load_state_dict(checkpoints["des1"])
-    optimizer_G.load_state_dict(checkpoints["optimizer_G"])
-    optimizer_D.load_state_dict(checkpoints["optimizer_D"])
-    amp.load_state_dict(checkpoints["amp"])
-
-#The mean and standard deviation for normalizing S2FGAN inputs.
-mean = torch.tensor([0.5 * 255]).cuda().view(1,1,1,1)
-std = torch.tensor([0.5 * 255]).cuda().view(1,1,1,1)
-
-def process(x,img,labels):
+#write the paramters to train S2FGAN in log.txt
+def print(x):
+    with open("log.txt","a") as f:
+        f.write(str(x) + "\n")
+        
+def accumulate(model1, model2, decay=0.999):
     """
-    Return normalized x and images
+    Return None
     Parameters
     ----------
-    X : torch.cuda Tensor of shape (batch_size,channels,height,width)
-    img : torch.cuda Tensor of shape (batch_size,channels,height,width)
-    labels : torch.cuda Tensor of shape (batch_size, number of attributes)
-    
+    model1 : pytorch model
+    model2 : pytorch model
+    decay  : int, default 0.999, the speed of updating model1 parameter
+        
     Returns
     -------
-    X : noramlised X.
-    img : normalised img.
-    labels: same
-    """
-    #sanity check to, transfer dtype of x and img to fload32.
-    x        = x.float()
-    img      = img.float()
-    
-    if opt.task_type != 1:
-        x        =  (x.sub_(mean).div_(std))
-    img      =  (img.sub_(mean).div_(std))
-    return x,img,labels
+    None
+    Update model1 paramter by model2 paramter.
+    """  
+    par1 = dict(model1.named_parameters())
+    par2 = dict(model2.named_parameters())
 
+    for k in par1.keys():
+        par1[k].data.mul_(decay).add_(par2[k].data, alpha=1 - decay)
+        
 class data_prefetcher():
     '''
     A wrapper of dataloader, to load the data to cuda and process it during S2F training.
     '''
-    def __init__(self, data):
+    def __init__(self, loader):
         """
         Return None
         Parameters
@@ -208,7 +70,7 @@ class data_prefetcher():
         
         Initialize cuda stream and preload the data when intialize the classes
         """
-        self.data = iter(data)
+        self.loader = iter(loader)
         self.stream = torch.cuda.Stream()
         self.preload()
 
@@ -223,14 +85,14 @@ class data_prefetcher():
         -------
         None
         load the data to cuda and process data using process function. Here is concurrent happens.
-        """        
+        """
         try:
-            self.next_input  = next(self.data)
+            self.next_input  = next(self.loader)
         except StopIteration:
             self.next_input = None
             return
         with torch.cuda.stream(self.stream):
-            self.next_input = process(*[i.cuda(non_blocking=True) for i in self.next_input])
+            self.next_input = [i.cuda(non_blocking=True) for i in self.next_input]
             
     def next(self):
         """
@@ -243,230 +105,427 @@ class data_prefetcher():
         -------
         None
         Synchronise the stream, return preloaded data, and load data for next batch. 
-        """            
+        """  
         torch.cuda.current_stream().wait_stream(self.stream)
         input = self.next_input
         self.preload()
         return input
 
-
-
-# Initialize pytorch dataloaders
-dataloader = DataLoader(
-    CeleDataset(opt,True, STEP),
-    batch_size=opt.batch_size,
-    shuffle=True,
-    num_workers=1
-)
-
-#calculate the batch size based on ATMDTT for the validation data loader
-val_batch_size = len(opt.ATMDTT) + 2
-
-val_dataloader = DataLoader(
-    CeleDataset(opt,False, STEP),
-    batch_size=val_batch_size,
-    shuffle=True,
-    num_workers=1
-)
-
-#Rename the cuda tensor for using purpose
-Tensor = torch.cuda.FloatTensor
-LongTensor = torch.cuda.LongTensor
-BoolTensor = torch.cuda.BoolTensor
-
-
-#Intialise the intensity control parameters
-LABELS = Tensor(opt.ATMDTT)
-scale =  Tensor([-3.0,-2.5, -2.0,-1.5, -1.0, -0.5,0,0.5, 1.0,1.5,2.0,2.5,3.0]).view(13,1)
-
-#The rgb color used to visualise the mask
-color_list = [[204, 0, 0], [76, 153, 0], [204, 204, 0], [51, 51, 255], [204, 0, 204], [0, 255, 255], [255, 204, 204], [102, 51, 0], [255, 0, 0], [102, 204, 0], [255, 255, 0], [0, 0, 153], [0, 0, 204], [255, 51, 153], [0, 204, 204], [0, 51, 0], [255, 153, 51], [0, 204, 0]]
-
-#Transfer the binary mask to rgb color for visualization purpose
-def toColor(mask):
-    mask = mask.view(opt.channels,128,128)
-    img  = torch.zeros((3,128,128),device = mask.device)
-    for idx,color in enumerate(color_list):
-        img[0,mask[idx] == 1] = color[0]
-        img[1,mask[idx] == 1] = color[1]
-        img[2,mask[idx] == 1] = color[2]
-    return (img.view(1,3,128,128) - mean)/std
-
-#used to sample images during training
-def sample_images(batches_done):
+def sample_data(loader,device):
     """
-    Return None
+    Return normalized sketch, normalized images and label
     Parameters
     ----------
-    batches_done:int, how many batches the model has been trained. It is used for naming samples.
+    loader : pytorch loader
+    device : cuda device name
+    
+    Returns
+    -------
+    sketch : noramlised X.
+    img    : normalised img.
+    labels : same
+    """
+    while True:
+        pref = data_prefetcher(loader)
+        data = pref.next()
+        while data is not None:
+            [sketch,img,label] = data
+            sketch = (sketch - 255 * 0.5) / (255 * 0.5)
+            img    = (img - 255 * 0.5) / (255 * 0.5)
+            label  = label
+            data = pref.next()
+            yield [sketch,img,label]
+
+
+def train(args, dataloader_train,dataloader_val, models, g_optim, d_optim, device):
+    
+    """
+    Return normalized sketch, normalized images and label
+    Parameters
+    ----------
+    args             : args for S2FGAN
+    dataloader_train : dataloader for training
+    dataloader_val   : dataloader for evaluation
+    models           : S2FGAN models
+    g_optim          : generator optimizer 
+    d_optim          : discriminator optimizer
+    device           : cuda device
     
     Returns
     -------
     None
-    Sample images according to the ATMDTT and intensity controls.
-    Save the samples to images folder.
-    """  
-    x, img, label = process(*[i.cuda(non_blocking=True) for i in next(iter(val_dataloader))])
-    current_label = torch.cat((LABELS,label[-2:]))
-    img_samples = None
-    
-    for e,i,l,a in zip(x,img,current_label,label):
-        
-        if STEP == 3:
-            scale_factor = 4
-        elif STEP == 2:
-            scale_factor = 2
-        else:
-            scale_factor = 1
-        if opt.task_type == 0:
-            d  =  e.view(-1,opt.channels,128,128).repeat(1,3,1,1)
-        else:
-            d  = toColor(e)
-        d =  F.interpolate(d,scale_factor = scale_factor, mode = 'bilinear')[0]
-        e  =  e.view(1,opt.channels,128,128).repeat(13,1,1,1) 
-        l  =  l.view(1,len(opt.selected_attrs)).repeat(13,1) * scale
-        decode,latent = E1(e)
-        im = D1(decode,latent,l)
-        im = torch.cat([x for x in im],-1) 
-        img_sample = torch.cat((d,i,im),-1).unsqueeze(0)
-        img_samples = img_sample if img_samples is None else torch.cat((img_samples,img_sample),-2)
-    save_image(img_samples, "images/%d.png" %  batches_done, nrow=16, normalize=True, range=(-1,1))
-              
-def R1_penalty(real_pred,real_img):
+    A trained S2FGAN.
     """
-    Return None
-    Parameters
-    ----------
-    real_pred: (batch_size, 1) The prediction scores of real images 
-    real_img:  (batch_size, channels, height, weight) The batch of images corresponding to real_pred
-    Returns
-    -------
-    grad_penalty: The gradient penalty of predicting real images as fake images.
-    Note the sign of real_pred not been changed.
-    """  
-    grad_real = autograd.grad(
-        outputs=real_pred.sum(), inputs=real_img, create_graph=True
-        )[0]
-    grad_penalty = (
-        grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
-        ).mean()
-    grad_penalty = 10 / 2 * grad_penalty
-    return grad_penalty
-
-# ----------
-#  Training
-# ----------
-#Record starting time, to estimate the time need for training.
-start_time = time.time()
-for epoch in range(opt.epoch, opt.n_epochs):
-    pref = data_prefetcher(dataloader)
-    data = pref.next()
-    #record how many batch has been processed in this epoch
-    i = 0
-    while data is not None:
     
-        x,img,label = data
+    [model,model_ema] = models
+    
+    #speed data loading and process data
+    loader     = sample_data(dataloader_train, device)
+    loader_val = sample_data(dataloader_val,device)
+    
+    print("Trianing start")
+
+    loss_dict = {}
+
+    model_module = model.module
+
+    #intialize paramters for adaptive discriminator agumentation.
+    accum = 0.5 ** (32 / (10 * 1000))
+    ada_augment = torch.tensor([0.0, 0.0], device=device)
+    ada_aug_p = args.augment_p if args.augment_p > 0 else 0.0
+    ada_aug_step = args.ada_target / args.ada_length
+    r_t_stat = 0
+
+    #Record starting time, to estimate the time need for training.    
+    start_time = time.time()
+
+    for idx in range(args.iter):
+        i = idx + args.start_iter
+
+        if i > args.iter:
+            print("Done!")
+
+            break
+
+        sketch,img,label = next(loader)
         
         #samples attribute shiting vector
-        sampled_ratio = -Variable(Tensor(np.random.uniform(-1,3, (x.size(0), len(opt.selected_attrs))))) * label
-        target_ratio  = label + sampled_ratio
-        img.requires_grad = True
+        sampled_ratio = torch.FloatTensor(np.random.uniform(-4,4, (sketch.size(0), c_dim))).to(device)
+        sampled_mask  = torch.FloatTensor(np.random.randint(0,2, (sketch.size(0), 1)) * 1.0).to(device)
+        sampled_ratio = sampled_ratio * sampled_mask
+        target_ratio  = (label * 2 - 1)  + sampled_ratio
+        target_mask   = target_ratio >= 0
         
-        # -----------------
-        #  Train Generator
-        # -----------------
+        #create domain label for sketch and img
+        domain_sketch = torch.zeros((sketch.size(0),1)).type(torch.FloatTensor).to(device)
+        domain_img    = torch.ones((img.size(0),1)).type(torch.FloatTensor).to(device)
                     
-        optimizer_G.zero_grad()
-        decode,latent = E1(x)
         
-        # sample image
-        sample_img  = D1(decode,latent, sampled_ratio)
-        #reconstruct image
-        reconst_img   = D1(decode,latent,torch.zeros((x.size(0),len(opt.selected_attrs)),device = x.device))
+        fake_img_pred, real_img_pred, bce = model(img,sketch,sampled_ratio,label,target_mask, ada_aug_p = ada_aug_p, train_discriminator = True)
         
-        #adv loss
-        sample_valid, predict_ratio = des1(sample_img)           
-        loss_GAN    = torch.mean(F.softplus(-sample_valid))
-        #pixel loss    
-        loss_pixel  = criterion_reconst(reconst_img, img).mean()
-        #vgg loss
-        loss_vgg    = vgg(reconst_img, img).mean()
-        #attribute reconstruction loss
-        loss_ratio  =  criterion_ratio(predict_ratio, target_ratio).mean()
-        #total loss    
-        loss_G = loss_GAN + loss_pixel * lambda_reconst + loss_ratio * lambda_ratio + loss_vgg * lambda_vgg 
-        with amp.scale_loss(loss_G, optimizer_G,loss_id = 0) as scaled_loss:
-            scaled_loss.backward()   
-            
-        optimizer_G.step()
+        d_loss    = F.softplus(-real_img_pred).mean() + F.softplus(fake_img_pred).mean() + bce.mean()
         
-        # ---------------------
-        #  Train Discriminator
-        # ---------------------
-        optimizer_D.zero_grad()  
-        valid, clf = des1(img)
-        fake, _    = des1(sample_img.detach()) 
-        loss_cls   = criterion_ratio(clf, label)
-        #calculate accuracy 
-        acc_D  = ((clf > 0) == (label > 0)).sum().type(Tensor) / label.numel()
-        # Gradient penalty
-        gradient_penalty = R1_penalty(valid,img)
-        loss_D   = torch.mean(F.softplus(-valid)) + torch.mean(F.softplus(fake)) + loss_cls + gradient_penalty
-        with amp.scale_loss(loss_D,optimizer_D,loss_id = 1) as scaled_loss:
-            scaled_loss.backward()
-        optimizer_D.step()
-        # Estimate the time left to train S2FGAN.
-        batches_done = epoch * len(dataloader) + i
-        batches_left = opt.n_epochs * len(dataloader) - batches_done
-        time_left = datetime.timedelta(seconds=batches_left * (time.time() - start_time) / (batches_done + 1))
-        
-        # Sample Image and Print log
-        if batches_done % opt.sample_interval == 0:
-            # Print log
-            with open("log.txt","a") as f:
-                f.write(
-                    "\r[Epoch %d/%d] [Batch %d/%d] [D adv: %f, gp: %f, cls: %f, acc: %f] [G loss: %f, pixel: %f, vgg: %f, ratio: %f, adv: %f] ETA: %s"
-                    % (
-                        epoch,
-                        opt.n_epochs,
-                        i,
-                        len(dataloader),
-                        loss_D.item() - loss_cls.item() - gradient_penalty.item(),
-                        gradient_penalty.item(),
-                        loss_cls.item(),
-                        acc_D.item(),
-                        loss_G.item(),
-                        loss_pixel.item(),
-                        loss_vgg.item(),
-                        loss_ratio.item(),
-                        loss_GAN.item(),
-                        time_left,
-                    ) +"\n"
-                )
-            #sample images according to sample interval
-            with torch.no_grad():
-                E1.eval()
-                D1.eval()
-                sample_images(batches_done)    
-                E1.train()
-                D1.train()
-        #load data for next batch.
-        data = pref.next()
-        #record how many batch has been processed in this epoch
-        i += 1
-        
-    # Save model checkpoints
-    if opt.checkpoint_interval != -1 and (epoch + 1) % opt.checkpoint_interval == 0:
-        checkpoits = {
-            "E1":E1.state_dict(),
-            "D1":D1.state_dict(),
-            "des1":des1.state_dict(),
-            "optimizer_G":optimizer_G.state_dict(),
-            "optimizer_D":optimizer_D.state_dict(),
-            "amp": amp.state_dict()
-            }
-        torch.save(checkpoits, "saved_models/checkpoits_%d.pt" %  epoch)
+        loss_dict["d_loss"] = d_loss
+        d_optim.zero_grad()
+        d_loss.backward()
+        d_optim.step()
 
+        for real_pred in [real_img_pred]:
+            if args.augment and args.augment_p == 0:
+                ada_augment_data = torch.tensor(
+                    (torch.sign(real_pred).sum().item(), real_pred.shape[0]), device=device
+                )
+                ada_augment += ada_augment_data
+    
+                if ada_augment[1] > 255:
+                    pred_signs, n_pred = ada_augment.tolist()
+                    r_t_stat = pred_signs / n_pred
+                    
+                    if r_t_stat > args.ada_target:
+                        sign = 1
+    
+                    else:
+                        sign = -1
+                    ada_aug_p += sign * ada_aug_step * n_pred
+                    ada_aug_p = min(1, max(0, ada_aug_p))
+                    ada_augment.mul_(0)
+                
+        d_regularize = i % args.d_reg_every == 0
+        if d_regularize:
+            img.requires_grad = True
             
+            r1_loss = model(img, d_regularize = True)
+            r1_loss = r1_loss.mean()
+        
+            d_optim.zero_grad()
+            (args.r1 / 2 * r1_loss * args.d_reg_every).backward()
+            d_optim.step()
+
+        loss_dict["r1"] = r1_loss
+        
+        img.requires_grad = False
+        
+        #samples attribute shiting vector
+        sampled_ratio = torch.FloatTensor(np.random.uniform(-4,4, (sketch.size(0), c_dim))).to(device)
+        sampled_mask  = torch.FloatTensor(np.random.randint(0,2, (sketch.size(0), 1)) * 1.0).to(device)
+        sampled_ratio = sampled_ratio * sampled_mask
+        target_ratio  = (label * 2 - 1)  + sampled_ratio
+        target_mask   = target_ratio >= 0
+
+        
+        g_loss = model(img,sketch,sampled_ratio,label,target_mask, domain_img,domain_sketch, ada_aug_p = ada_aug_p,train_generator = True)
+        g_loss = g_loss.mean() 
+        
+        loss_dict["g_loss"]     = g_loss
+        
+        g_optim.zero_grad()
+        g_loss.backward()
+        g_optim.step()
+
+        accumulate(model_ema, model_module, accum)
+        
+        loss_reduced = loss_dict
+
+        d_loss    = loss_reduced["d_loss"].item()
+        g_loss    = loss_reduced["g_loss"].item()
+        r1        = loss_reduced["r1"].item()
+        
+        #Print log
+        if i % 10 == 0:
+            # Determine approximate time left
+            batches_done = idx
+            batches_left = args.iter - batches_done
+            time_left = datetime.timedelta(seconds=batches_left * (time.time() - start_time) / (batches_done + 1))
+                
+            print(
+                (
+                    f"Epoch[{idx}/{args.iter}]; augment: {ada_aug_p:.4f}; "
+                    f"d_loss: {d_loss:.4f}; g_loss: {g_loss:.4f}; r1: {r1:.4f}; ETA: {time_left}"
+                )
+            )
             
+        #sample images
+        if i % 400 == 0:
+            sketch,img,label = next(loader_val)
+            with torch.no_grad():
+                samples = None
+                for e, j,l in zip(sketch,img,torch.cat((LABELS,label[-2:]))):
+                    d =   e.view(1,args.img_height,args.img_width).repeat(3,1,1)
+                    e  =  e.view(1,1,256,256).repeat(13,1,1,1) 
+                    l  =  l.view(1,12).repeat(13,1) * SCALE
+                    k,im = model_ema(j.view(1,3,256,256),sketch = e,sampled_ratio = l,generate = True) 
+                    im = torch.cat([x for x in im],-1) 
+                    sample = torch.cat((d,k.view(3,256,256),j,im),-1).unsqueeze(0)
+                    samples = sample if samples is None else torch.cat((samples,sample),-2)
+                    
+                utils.save_image(
+                    samples,
+                    f"sample/{str(i).zfill(6)}.png",
+                    nrow= 16,
+                    normalize=True,
+                    range=(-1, 1),
+                    )
+                 
+        # Save model checkpoints
+        if i % 10000 == 0:
+            torch.save(
+                {
+                    "model"    :model_module.state_dict(),
+                    "model_ema":model_ema.state_dict()
+                },
+                f"checkpoint/{str(i).zfill(6)}.pt",
+            )
+
+
+if __name__ == "__main__":
+    device = "cuda"
+    
+    parser = argparse.ArgumentParser(description="S2FGAN trainer")
+
+    parser.add_argument(
+                        "--iter", 
+                        type=int, 
+                        default=100, 
+                        help="total training iterations"
+                        )
+    parser.add_argument(
+                        "--batch",
+                        type=int, 
+                        default = 4, 
+                        help="batch sizes"
+                        )
+    
+    parser.add_argument(
+                        "--r1",
+                        type=float, 
+                        default=1, 
+                        help="weight of the r1 regularization"
+                        )
+
+    parser.add_argument(
+                        "--d_reg_every",
+                        type=int,
+                        default=16,
+                        help="interval of the applying r1 regularization",
+                        )
+
+    parser.add_argument(
+                        "--lr", 
+                        type=float, 
+                        default=0.002, 
+                        help="learning rate"
+                        )
+
+    parser.add_argument(
+                        "--augment", 
+                        type=bool, 
+                        default=True, 
+                        help="apply discriminator augmentation"
+                        )
+                    
+    parser.add_argument(
+                        "--augment_p",
+                        type=float,
+                        default=0,
+                        help="probability of applying augmentation. 0 = use adaptive augmentation",
+                        )
+    parser.add_argument(
+                        "--ada_target",
+                        type=float,
+                        default=0.6,
+                        help="target augmentation probability for adaptive augmentation",
+                        )
+    
+    parser.add_argument(
+                        "--ada_length",
+                        type=int,
+                        default=500 * 1000,
+                        help="target duraing to reach augmentation probability for adaptive augmentation",
+                        )
+    parser.add_argument(
+                        "--ada_every",
+                        type=int,
+                        default=256,
+                        help="probability update interval of the adaptive augmentation",
+                        )
+    
+    parser.add_argument(
+                        "--img_height", 
+                        type=int, 
+                        default=256, 
+                        help="size of image height"
+                        )
+    
+    parser.add_argument(
+                        "--img_width", 
+                        type=int, 
+                        default=256, 
+                        help="size of image width"
+                        )
+    parser.add_argument(
+                        "--NumOfImage", 
+                        type=int, 
+                        default= 10, 
+                        help = "number of images in the zip"
+                        )
+    
+    parser.add_argument(
+                        "--imageZip", 
+                        type=str, 
+                        default= "data/CelebAMask-HQ-Sample.zip"
+                        )
+    
+    parser.add_argument(
+                        "--hedEdgeZip", 
+                        type=str, 
+                        default= "data/hed_edge_256-Sample.zip"
+                        )
+    
+    parser.add_argument(
+                        "--hedEdgePath", 
+                        type=str, 
+                        default= "hed_edge_256-Sample"
+                        )
+    
+    parser.add_argument(
+                        "--imagePath",
+                        type=str, 
+                        default= "CelebAMask-HQ-Sample/CelebA-HQ-img"
+                        )
+    
+    parser.add_argument(
+                        "--TORCH_HOME", 
+                        type=str, 
+                        default="None", 
+                        help="where to load/save pytorch pretrained models"
+                        )
+    
+    parser.add_argument(
+                        "--selected_attrs",
+                        type = list,
+                        nargs="+",
+                        help="selected attributes for the CelebAMask-HQ dataset",
+                        default=["Smiling", "Male","No_Beard", "Eyeglasses","Young", "Bangs", "Narrow_Eyes", "Pale_Skin", "Big_Lips","Big_Nose","Mustache","Chubby"],
+                        )
+    
+    parser.add_argument(
+                        "--label_path", 
+                        type = str, 
+                        default = "data/CelebAMask-HQ-attribute-anno.txt", 
+                        help = "attributes annotation text file of CelebAMask-HQ"
+                        )
+    
+    parser.add_argument(
+                        "--ATMDTT",
+                        type = list,
+                        nargs="+",
+                        help="Attributes to manipulate during testing time",
+                        default=    
+                        [[1,0,0,0,0,0,0,0,0,0,0,0],
+                         [0,1,0,0,0,0,0,0,0,0,0,0]
+                         ]
+                        )
+    
+    parser.add_argument(
+                        "--model_type", 
+                        type = int, 
+                        default = 0, 
+                        help = "0- S2F-DIS, 1- S2F-DEC"
+                        )
+
+    args = parser.parse_args()
+    
+    args.start_iter = 0
+    c_dim = len(args.selected_attrs)
+    
+    #create folders to store samples and checkpoints
+    os.makedirs("sample", exist_ok=True)
+    os.makedirs("checkpoint", exist_ok=True)
+    
+    #Set TORCH_HOME to system enviroment.
+    if args.TORCH_HOME != "None":
+        os.environ['TORCH_HOME'] = args.TORCH_HOME
+
+
+    #Sanity check of GPU installation
+    if not torch.cuda.is_available():
+        raise SystemExit("GPU Required")
+
+    #initialization
+    model     = S2FGAN(args,c_dim,augment).to(device) 
+    
+    model_ema = S2FGAN(args,c_dim,augment).to(device)
+    
+    accumulate(model_ema, model, 0)
+    model_ema.eval()
+    
+    #get model optimizer
+    
+    g_optim = model.g_optim
+    d_optim = model.d_optim
             
+    model = nn.DataParallel(model)
+    #initialize dataloader
+    
+    dataset = CeleDataset(args, True)
+    loader = data.DataLoader(
+        dataset,
+        batch_size=args.batch,
+        num_workers = 4,
+        drop_last = True
+    )
+
+    dataset_val = CeleDataset(args, False)
+    dataloader_val = torch.utils.data.DataLoader(
+        dataset_val, 
+        batch_size=len(args.ATMDTT) + 2,
+        num_workers=4
+    )
+    
+    
+    #Intialise the intensity control parameters for demonstration
+    LABELS = torch.FloatTensor(args.ATMDTT).to(device)
+    SCALE =  torch.FloatTensor([-4.0,-3.0, -2.0,-1.5, -1.0, -0.5,0,0.5, 1.0,1.5,2.0,3.0,4.0]).to(device).view(13,1)
+    
+    #start training
+    train(args,loader,dataloader_val,[model,model_ema], g_optim, d_optim, device)
