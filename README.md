@@ -102,6 +102,8 @@ Data prefetcher is based on the implementation from NVIDIA Apex: https://github.
 
 The HED detector loading and Crop layer implementation is from Rosebrock: https://www.pyimagesearch.com/2019/03/04/holistically-nested-edge-detection-with-opencv-and-deep-learning/
 
+## Demo Video for Attribute Editing
+![](https://youtu.be/nd3Gq2lV_Do)
 
 ## Citation
 If you find [S2FGAN](https://arxiv.org/abs/2011.14785) useful in your research work, please consider citing:
