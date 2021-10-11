@@ -100,13 +100,13 @@ The HED detector loading and Crop layer implementation is from Rosebrock: https:
 
 ## Citation
 If you find [S2FGAN](https://arxiv.org/abs/2011.14785) useful in your research work, please consider citing:
-@ARTICLE{s2fgan,
-author = {Yang, Yan and Hossain, Md and Gedeon, Tom and Rahman, Shafin},
-year = {2020},
-month = {11},
-pages = {},
-title = {S2FGAN: Semantically Aware Interactive Sketch-to-Face Translation}
-}
+    @ARTICLE{s2fgan,
+    author = {Yang, Yan and Hossain, Md and Gedeon, Tom and Rahman, Shafin},
+    year = {2020},
+    month = {11},
+    pages = {},
+    title = {S2FGAN: Semantically Aware Interactive Sketch-to-Face Translation}
+    }
 
 
 
