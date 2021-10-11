@@ -70,25 +70,19 @@ python3 train.py --model_type 0 #Please set data path properly.
 python3 train.py --model_type 1 #Please set data path properly. 
 ```
 
-### Train AttGAN
-The AttGAN implementation is from https://github.com/elvisyjlin/AttGAN-PyTorch.
-
-### Train STGAN
-The STGAN implementation is from https://github.com/bluestyle97/STGAN-pytorch.
+## Code for Related Work
+* AttGAN: https://github.com/elvisyjlin/AttGAN-PyTorch.
+* STGAN: https://github.com/bluestyle97/STGAN-pytorch.
+* Pix2PixHD: https://github.com/NVIDIA/pix2pixHD
+* DFP: https://github.com/LiYuhangUSTC/Sketch2Face
+* DFD: https://github.com/IGLICT/DeepFaceDrawing-Jittor
+* DPS: https://github.com/VITA-Group/DeepPS
 
 ## Evaluation metrics
-
-### Calculate FID Score
-The FID score can be calculated from https://github.com/mseitzer/pytorch-fid.
-
-### Calculate IS Score
-The IS score can be calculated from https://github.com/sbarratt/inception-score-pytorch.
-
-### Evaluation Classifier
-The evaluation classier can be obtained from https://github.com/csmliu/STGAN.
-
-### Simulate Badly Drawn Sketches
-Please see https://github.com/VITA-Group/DeepPS/blob/master/src/roughSketchSyn.py
+* FID Score: https://github.com/mseitzer/pytorch-fid.
+* IS Score: https://github.com/sbarratt/inception-score-pytorch.
+* Evaluation Classier: https://github.com/csmliu/STGAN.
+* Simulate Badly Drawn Sketches: https://github.com/VITA-Group/DeepPS/blob/master/src/roughSketchSyn.py
 
 ## License
 The Equalized layer, Modulated layer, PixelNorm and CUDA kernels are from offical styleGAN. For more details, please refer to repostiories: https://github.com/NVlabs/stylegan2
