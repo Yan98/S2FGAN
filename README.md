@@ -84,6 +84,15 @@ python3 train.py --model_type 1 #Please set data path properly.
 * Evaluation Classier: https://github.com/csmliu/STGAN.
 * Simulate Badly Drawn Sketches: https://github.com/VITA-Group/DeepPS/blob/master/src/roughSketchSyn.py
 
+## Todo
+
+- [ ] Upload pretrained checkpoints
+- [ ] Upload testing script
+
+## Notice
+* We refactor the current implementation from our original training code. If you find any implementation error, please do not hesitate to contact us.
+
+
 ## License
 The Equalized layer, Modulated layer, PixelNorm and CUDA kernels are from offical styleGAN. For more details, please refer to repostiories: https://github.com/NVlabs/stylegan2
 
