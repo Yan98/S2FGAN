@@ -70,20 +70,25 @@ python3 train.py --model_type 0 #Please set data path properly.
 python3 train.py --model_type 1 #Please set data path properly. 
 ```
 
-## Train AttGAN
+### Train AttGAN
 The AttGAN implementation is from https://github.com/elvisyjlin/AttGAN-PyTorch.
 
-## Train STGAN
+### Train STGAN
 The STGAN implementation is from https://github.com/bluestyle97/STGAN-pytorch.
 
-## Calculate FID Score
+## Evaluation metrics
+
+### Calculate FID Score
 The FID score can be calculated from https://github.com/mseitzer/pytorch-fid.
 
-## Calculate IS Score
+### Calculate IS Score
 The IS score can be calculated from https://github.com/sbarratt/inception-score-pytorch.
 
-## Evaluation Classifier
+### Evaluation Classifier
 The evaluation classier can be obtained from https://github.com/csmliu/STGAN.
+
+### Simulate Badly Drawn Sketches
+Please see https://github.com/VITA-Group/DeepPS/blob/master/src/roughSketchSyn.py
 
 ## License
 The Equalized layer, Modulated layer, PixelNorm and CUDA kernels are from offical styleGAN. For more details, please refer to repostiories: https://github.com/NVlabs/stylegan2
