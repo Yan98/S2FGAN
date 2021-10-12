@@ -109,7 +109,7 @@ The HED detector loading and Crop layer implementation is from Rosebrock: https:
 If you find [S2FGAN](https://arxiv.org/abs/2011.14785) useful in your research work, please consider citing:
 ```bibtex
     @ARTICLE{s2fgan,
-    author = {Yang, Yan and Hossain, Md and Gedeon, Tom and Rahman, Shafin},
+    author = {Yang, Yan and Hossain, Md Zakir and Gedeon, Tom and Rahman, Shafin},
     year = {2020},
     month = {11},
     pages = {},
