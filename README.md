@@ -89,7 +89,7 @@ python3 train.py --model_type 1 #Please set data path properly.
 - [ ] Upload pretrained checkpoints
 - [ ] Upload testing script
 
-If you are urgent to use the checkpoint, please drop me(mailto:yang.yan@anu.edu.au?subject=[GitHub]S2FGAN) an email.
+If you are urgent to use the checkpoint, please drop [me](mailto:yang.yan@anu.edu.au?subject=[GitHub]S2FGAN) an email.
 
 ## License
 The Equalized layer, Modulated layer, PixelNorm and CUDA kernels are from offical styleGAN. For more details, please refer to repostiories: https://github.com/NVlabs/stylegan2
